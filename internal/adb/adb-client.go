@@ -2,6 +2,7 @@ package adb
 
 import (
 	"context"
+	"strings"
 
 	"github.com/TinkerUp/adb-server/types/models"
 	adb "github.com/zach-klippenstein/goadb"
@@ -46,23 +47,41 @@ func (client *GoADBClient) Devices(ctx context.Context) ([]models.Device, error)
 		return nil, err
 	}
 
-	out := make([]models.Device, 0, len(devices))
+	devicesList := make([]models.Device, 0, len(devices))
 
 	for _, deviceInfo := range devices {
 		device := client.adb.Device(adb.DeviceWithSerial(deviceInfo.Serial))
 
-		deviceState, err := device.State()
+		deviceState, stateErr := device.State()
+		deviceManufacturer, manufacturerErr := GetDeviceManufacturer(device)
 
-		if err != nil {
-			return nil, err
+		if stateErr != nil {
+			deviceState = adb.StateInvalid
 		}
 
-		out = append(out, models.Device{
-			Serial: deviceInfo.Serial,
-			State:  ConvertState(deviceState),
+		if manufacturerErr != nil {
+			deviceManufacturer = "Unknown"
+		}
+
+		standardizedState := ConvertState(deviceState)
+
+		devicesList = append(devicesList, models.Device{
+			Serial:       deviceInfo.Serial,
+			State:        standardizedState,
+			Model:        deviceInfo.Model,
+			Manufacturer: deviceManufacturer,
+			IsAuthorized: standardizedState == models.DeviceStateOnline,
 		})
 	}
-	return out, nil
+	return devicesList, nil
+}
+
+func GetDeviceManufacturer(device *adb.Device) (string, error) {
+	manufacturer, err := device.RunCommand("getprop", "ro.product.manufacturer")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(manufacturer), nil
 }
 
 func ConvertState(state adb.DeviceState) models.DeviceState {
