@@ -3,6 +3,7 @@ package adb
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/TinkerUp/adb-server/types/models"
 	adb "github.com/zach-klippenstein/goadb"
@@ -12,7 +13,7 @@ type ADBClient interface {
 	Version(ctx context.Context) (int, error)
 
 	Devices(ctx context.Context) ([]models.Device, error)
-	TrackDeviceStates(ctx context.Context) (<-chan models.DeviceStateChange, error)
+	TrackDeviceStates(ctx context.Context, deviceSerial string) (<-chan models.DeviceStateChange, error)
 
 	Packages(ctx context.Context, deviceId string, opts models.ListPackageOptions) ([]models.Package, error)
 	Install(ctx context.Context, deviceId string, pkgPath string) error
@@ -74,6 +75,28 @@ func (client *GoADBClient) Devices(ctx context.Context) ([]models.Device, error)
 		})
 	}
 	return devicesList, nil
+}
+
+func (client *GoADBClient) TrackDeviceStates(ctx context.Context, deviceSerial string) (<-chan models.DeviceStateChange, error) {
+	goAdbChannel := client.adb.NewDeviceWatcher().C()
+
+	stateChannel := make(chan models.DeviceStateChange)
+
+	go func() {
+		for watcher := range goAdbChannel {
+			if watcher.Serial == deviceSerial {
+				stateChange := models.DeviceStateChange{
+					Serial:    deviceSerial,
+					OldState:  ConvertState(watcher.OldState),
+					NewState:  ConvertState(watcher.NewState),
+					Timestamp: time.Now(),
+				}
+				stateChannel <- stateChange
+			}
+		}
+	}()
+
+	return stateChannel, nil
 }
 
 func GetDeviceManufacturer(device *adb.Device) (string, error) {
