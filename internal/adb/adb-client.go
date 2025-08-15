@@ -51,20 +51,22 @@ func (client *GoADBClient) Devices(ctx context.Context) ([]models.Device, error)
 	devicesList := make([]models.Device, 0, len(devices))
 
 	for _, deviceInfo := range devices {
-		device := client.adb.Device(adb.DeviceWithSerial(deviceInfo.Serial))
+		device := client.getDevice(deviceInfo.Serial)
 
 		deviceState, stateErr := device.State()
-		deviceManufacturer, manufacturerErr := GetDeviceManufacturer(device)
+		var deviceManufacturer string
 
 		if stateErr != nil {
 			deviceState = adb.StateInvalid
+		} else { // Why bother trying to get the manufacturer if the state is invalid
+			deviceManufacturer, _ = client.getDeviceManufacturer(device)
 		}
 
-		if manufacturerErr != nil {
+		if deviceManufacturer == "" {
 			deviceManufacturer = "Unknown"
 		}
 
-		standardizedState := ConvertState(deviceState)
+		standardizedState := client.convertState(deviceState)
 
 		devicesList = append(devicesList, models.Device{
 			Serial:       deviceInfo.Serial,
@@ -89,8 +91,8 @@ func (client *GoADBClient) TrackDeviceStates(ctx context.Context, deviceSerial s
 			if watcher.Serial == deviceSerial {
 				stateChange := models.DeviceStateChange{
 					Serial:    deviceSerial,
-					OldState:  ConvertState(watcher.OldState),
-					NewState:  ConvertState(watcher.NewState),
+					OldState:  client.convertState(watcher.OldState),
+					NewState:  client.convertState(watcher.NewState),
 					Timestamp: time.Now(),
 				}
 				stateChannel <- stateChange
@@ -101,7 +103,11 @@ func (client *GoADBClient) TrackDeviceStates(ctx context.Context, deviceSerial s
 	return stateChannel, nil
 }
 
-func GetDeviceManufacturer(device *adb.Device) (string, error) {
+func (client *GoADBClient) getDevice(serial string) *adb.Device {
+	return client.adb.Device(adb.DeviceWithSerial(serial))
+}
+
+func (client *GoADBClient) getDeviceManufacturer(device *adb.Device) (string, error) {
 	manufacturer, err := device.RunCommand("getprop", "ro.product.manufacturer")
 	if err != nil {
 		return "", err
@@ -109,7 +115,7 @@ func GetDeviceManufacturer(device *adb.Device) (string, error) {
 	return strings.TrimSpace(manufacturer), nil
 }
 
-func ConvertState(state adb.DeviceState) models.DeviceState {
+func (client *GoADBClient) convertState(state adb.DeviceState) models.DeviceState {
 	switch state {
 	case adb.StateOnline:
 		return models.DeviceStateOnline
