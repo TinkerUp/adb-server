@@ -83,6 +83,8 @@ func (client *GoADBClient) TrackDeviceStates(ctx context.Context, deviceSerial s
 	stateChannel := make(chan models.DeviceStateChange)
 
 	go func() {
+		defer close(stateChannel)
+
 		for watcher := range goAdbChannel {
 			if watcher.Serial == deviceSerial {
 				stateChange := models.DeviceStateChange{
