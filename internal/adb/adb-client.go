@@ -1,7 +1,9 @@
 package adb
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -101,6 +103,60 @@ func (client *GoADBClient) TrackDeviceStates(ctx context.Context, deviceSerial s
 	}()
 
 	return stateChannel, nil
+}
+
+func (client *GoADBClient) Packages(ctx context.Context, deviceId string, opts models.ListPackageOptions) ([]models.Package, error) {
+	device := client.getDevice(deviceId)
+
+	if device == nil {
+		return nil, errors.New("device not found")
+	}
+
+	args := []string{"-f"}
+
+	if opts.IncludeUninstalled {
+		args = append(args, "-u")
+	}
+	if opts.IncludeSystem {
+		args = append(args, "-s")
+	} else {
+		args = append(args, "-3")
+	}
+
+	out, err := device.RunCommand("pm list packages", args...)
+
+	if err != nil {
+		return nil, err
+	}
+
+	var packages []models.Package
+
+	scanner := bufio.NewScanner(strings.NewReader(out))
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+
+		indexOfEqual := strings.LastIndex(line, "=")
+
+		if line == "" || !strings.HasPrefix(line, "package:") || indexOfEqual == -1 {
+			continue
+		}
+
+		pkgPath := strings.TrimPrefix(line[:indexOfEqual], "package:")
+		pkgName := strings.TrimSpace(line[indexOfEqual+1:])
+
+		packages = append(packages, models.Package{
+			Name:     pkgName,
+			ApkPath:  pkgPath,
+			IsSystem: strings.Contains(pkgPath, "/system/"), // Sys apps generally are found in /system
+		})
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return packages, nil
 }
 
 func (client *GoADBClient) getDevice(serial string) *adb.Device {
