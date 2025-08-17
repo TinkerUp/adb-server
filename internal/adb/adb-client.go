@@ -163,7 +163,7 @@ func (client *GoADBClient) TrackDeviceStates(ctx context.Context, deviceSerial s
 	return stateChannel, nil
 }
 
-func (client *GoADBClient) Packages(ctx context.Context, deviceId string, opts models.ListPackageOptions) ([]models.Package, error) {
+func (client *GoADBClient) packages(deviceId string, opts models.ListPackageOptions) ([]models.Package, error) {
 	device := client.getDevice(deviceId)
 
 	if device == nil {
@@ -215,6 +215,30 @@ func (client *GoADBClient) Packages(ctx context.Context, deviceId string, opts m
 	}
 
 	return packages, nil
+}
+
+func (client *GoADBClient) Packages(ctx context.Context, deviceId string, opts models.ListPackageOptions) ([]models.Package, error) {
+	type result struct {
+		pkgs []models.Package
+		err  error
+	}
+
+	resultCh := make(chan result)
+
+	go func() {
+		packages, err := client.packages(deviceId, opts)
+		resultCh <- result{
+			pkgs: packages,
+			err:  err,
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case result := <-resultCh:
+		return result.pkgs, result.err
+	}
 }
 
 func (client *GoADBClient) getDevice(serial string) *adb.Device {
