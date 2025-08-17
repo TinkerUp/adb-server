@@ -64,7 +64,7 @@ func (client *GoADBClient) Version(ctx context.Context) (int, error) {
 	}
 }
 
-func (client *GoADBClient) Devices(ctx context.Context) ([]models.Device, error) {
+func (client *GoADBClient) devices() ([]models.Device, error) {
 	devices, err := client.adb.ListDevices()
 	if err != nil {
 		return nil, err
@@ -99,6 +99,30 @@ func (client *GoADBClient) Devices(ctx context.Context) ([]models.Device, error)
 		})
 	}
 	return devicesList, nil
+}
+
+func (client *GoADBClient) Devices(ctx context.Context) ([]models.Device, error) {
+	type result struct {
+		devices []models.Device
+		err     error
+	}
+
+	resultChannel := make(chan result)
+
+	go func() {
+		devices, err := client.devices()
+		resultChannel <- result{
+			devices: devices,
+			err:     err,
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case result := <-resultChannel:
+		return result.devices, result.err
+	}
 }
 
 func (client *GoADBClient) TrackDeviceStates(ctx context.Context, deviceSerial string) (<-chan models.DeviceStateChange, error) {
