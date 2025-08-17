@@ -133,15 +133,29 @@ func (client *GoADBClient) TrackDeviceStates(ctx context.Context, deviceSerial s
 	go func() {
 		defer close(stateChannel)
 
-		for watcher := range goAdbChannel {
-			if watcher.Serial == deviceSerial {
-				stateChange := models.DeviceStateChange{
-					Serial:    deviceSerial,
-					OldState:  client.convertState(watcher.OldState),
-					NewState:  client.convertState(watcher.NewState),
-					Timestamp: time.Now(),
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case watcher, ok := <-goAdbChannel:
+				if !ok {
+					return
 				}
-				stateChannel <- stateChange
+
+				if watcher.Serial == deviceSerial {
+					stateChange := models.DeviceStateChange{
+						Serial:    deviceSerial,
+						OldState:  client.convertState(watcher.OldState),
+						NewState:  client.convertState(watcher.NewState),
+						Timestamp: time.Now(),
+					}
+
+					select {
+					case stateChannel <- stateChange:
+					case <-ctx.Done():
+						return
+					}
+				}
 			}
 		}
 	}()
