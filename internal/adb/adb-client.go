@@ -41,7 +41,27 @@ func NewGoADBClient() (*GoADBClient, error) {
 }
 
 func (client *GoADBClient) Version(ctx context.Context) (int, error) {
-	return client.adb.ServerVersion()
+	type result struct {
+		ver int
+		err error
+	}
+
+	ch := make(chan result)
+
+	go func() {
+		version, err := client.adb.ServerVersion()
+		ch <- result{
+			ver: version,
+			err: err,
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case result := <-ch:
+		return result.ver, result.err
+	}
 }
 
 func (client *GoADBClient) Devices(ctx context.Context) ([]models.Device, error) {
