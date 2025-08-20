@@ -242,6 +242,11 @@ func (client *GoADBClient) Packages(ctx context.Context, deviceId string, opts m
 	}
 }
 
+// Implementation awaiting storage client
+func (client *GoADBClient) Install(ctx context.Context, deviceId string, apkPath string) error {
+	return nil
+}
+
 func (client *GoADBClient) Uninstall(ctx context.Context, deviceId string, pkgName string, keepData bool, user int) error {
 	device := client.getDevice(deviceId)
 
@@ -266,6 +271,16 @@ func (client *GoADBClient) Uninstall(ctx context.Context, deviceId string, pkgNa
 		return err
 	}
 
+	return nil
+}
+
+// Implementation awaiting storage client
+func (client *GoADBClient) Push(ctx context.Context, serial, localPath, remotePath string) error {
+	return nil
+}
+
+// Implementation awaiting storage client
+func (client *GoADBClient) Pull(ctx context.Context, serial, remotePath, localPath string) error {
 	return nil
 }
 
