@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -239,6 +240,33 @@ func (client *GoADBClient) Packages(ctx context.Context, deviceId string, opts m
 	case result := <-resultCh:
 		return result.pkgs, result.err
 	}
+}
+
+func (client *GoADBClient) Uninstall(ctx context.Context, deviceId string, pkgName string, keepData bool, user int) error {
+	device := client.getDevice(deviceId)
+
+	if device == nil {
+		return errors.New("device not found")
+	}
+
+	args := []string{}
+
+	if keepData {
+		args = append(args, "-k")
+	}
+	if user != 0 {
+		args = append(args, "-u", strconv.Itoa(user))
+	}
+
+	args = append(args, pkgName)
+
+	_, err := device.RunCommand("pm uninstall", args...)
+
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (client *GoADBClient) getDevice(serial string) *adb.Device {
