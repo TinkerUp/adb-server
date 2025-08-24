@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -11,10 +12,11 @@ import (
 	"time"
 
 	"github.com/TinkerUp/adb-server/types/models"
+	"github.com/google/uuid"
 )
 
 type FileService interface {
-	SaveFile(owner string, accessGroups []string, filename string, data []byte) (models.FileIndex, error)
+	SaveFile(owner string, accessGroups []string, filename string, fileExtension string, data []byte) (models.FileIndex, error)
 	UpdateFile(owner string, accessGroups []string, fileId string, filename string, data []byte) (models.FileIndex, error)
 
 	GetFile(owner string, fileId string) (models.File, error)
@@ -24,36 +26,48 @@ type FileService interface {
 }
 
 type fileService struct {
-	root string
-	db   *sql.DB
+	config FileServiceConfig
+	db     *sql.DB
 }
 
-func NewFileService(root string, db *sql.DB) *fileService {
+type FileServiceConfig struct {
+	Root                  string
+	SecureMode            bool
+	AllowedFileExtensions []string
+}
+
+func NewFileService(config FileServiceConfig, db *sql.DB) *fileService {
 	return &fileService{
-		root,
+		config,
 		db,
 	}
 }
 
-func (s *fileService) SaveFile(owner string, accessGroups []string, filename string, data []byte) (models.FileIndex, error) {
-	cleanName := filepath.Base(filename)
-	sandBoxRoot := filepath.Join(s.root, owner)
+func (s *fileService) SaveFile(owner string, accessGroups []string, filename string, fileExtension string, data []byte) (models.FileIndex, error) {
+	sandBoxRoot := filepath.Join(s.config.Root, owner)
 
 	if err := os.MkdirAll(sandBoxRoot, DirPermsDefault); err != nil {
 		return models.FileIndex{}, fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	checksumHash := sha256.Sum256(data)
-	checksum := hex.EncodeToString(checksumHash[:])
+	fileExtension = strings.ToLower(strings.TrimSpace(fileExtension))
 
-	nameHash := sha256.Sum256([]byte(cleanName + owner + time.Now().String()))
-	fileId := hex.EncodeToString(nameHash[:])
+	if !s.validateFileExtension(fileExtension) {
+		return models.FileIndex{}, fmt.Errorf("file extension not allowed: %s", fileExtension)
+	}
 
-	fileName := cleanName + "-" + fileId
+	sha256Sum := sha256.Sum256(data)
+	checksum := hex.EncodeToString(sha256Sum[:])
+
+	cleanFileName := filepath.Base(filename)
+
+	fileId := uuid.NewString()
+
+	fileName := fmt.Sprintf("%s-%s.%s", cleanFileName, fileId, fileExtension)
 	absFilePath := filepath.Join(sandBoxRoot, fileName)
 	cleanFilePath := filepath.Clean(absFilePath)
 
-	if !strings.HasPrefix(cleanFilePath, s.root) {
+	if !strings.HasPrefix(cleanFilePath, s.config.Root) {
 		return models.FileIndex{}, fmt.Errorf("file path escapes root: %s", cleanFilePath)
 	}
 
@@ -62,18 +76,25 @@ func (s *fileService) SaveFile(owner string, accessGroups []string, filename str
 	}
 
 	fileIndex := models.FileIndex{
-		ID:           fileId,
-		Size:         int64(len(data)),
-		Owner:        owner,
-		Checksum:     checksum,
-		FilePath:     cleanFilePath,
-		CreatedAt:    time.Now().Unix(),
-		AccessGroups: accessGroups,
+		ID:        fileId,
+		Size:      int64(len(data)),
+		Owner:     owner,
+		FilePath:  cleanFilePath,
+		Checksum:  checksum,
+		CreatedAt: time.Now().Unix(),
+	}
+
+	for group := range accessGroups {
+		_, err := s.db.Exec("INSERT INTO access_groups (fileId, groupId) VALUES (?, ?)", fileId, group)
+
+		if err != nil {
+			return models.FileIndex{}, fmt.Errorf("failed to insert access group: %w", err)
+		}
 	}
 
 	if _, err := s.db.Exec(
-		"INSERT INTO file_index (id, ownerId, size, filepath, createdAt, checksum, accessGroups) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		fileIndex.ID, fileIndex.Owner, fileIndex.Size, fileIndex.FilePath, fileIndex.CreatedAt, fileIndex.Checksum, fileIndex.AccessGroups,
+		"INSERT INTO file_index (id, ownerId, size, filepath, createdAt, checksum) VALUES (?, ?, ?, ?, ?, ?)",
+		fileIndex.ID, fileIndex.Owner, fileIndex.Size, fileIndex.FilePath, fileIndex.CreatedAt, fileIndex.Checksum,
 	); err != nil {
 		return models.FileIndex{}, fmt.Errorf("failed to insert file index: %w", err)
 	}
@@ -81,29 +102,26 @@ func (s *fileService) SaveFile(owner string, accessGroups []string, filename str
 	return fileIndex, nil
 }
 
-func (s *fileService) GetFile(owner string, fileId string) (models.File, error) {
-	fileIndex, err := s.db.Query(
-		"Select id, ownerId, size, filepath, createdAt, checksum, accessGroups FROM file_index WHERE id = ? AND ownerId = ?",
-		fileId, owner,
-	)
-
-	if err != nil {
-		return models.File{}, fmt.Errorf("failed to query file index: %w", err)
-	}
-
-	defer fileIndex.Close()
-
+func (s *fileService) GetFile(ctx context.Context, owner string, fileId string) (models.File, error) {
 	var metadata models.FileIndex
 
-	if err := fileIndex.Scan(
+	fileErr := s.db.QueryRowContext(
+		ctx,
+		"Select id, ownerId, size, filepath, createdAt, checksum, accessGroups FROM file_index WHERE id = ? AND ownerId = ?",
+		fileId, owner,
+	).Scan(
 		&metadata.ID, &metadata.Owner, &metadata.Size, &metadata.FilePath, &metadata.CreatedAt, &metadata.Checksum, &metadata.AccessGroups,
-	); err != nil {
-		return models.File{}, fmt.Errorf("failed to scan file index: %w", err)
+	)
+
+	if fileErr == sql.ErrNoRows {
+		return models.File{}, fmt.Errorf("file not found")
+	} else if fileErr != nil {
+		return models.File{}, fmt.Errorf("failed to query file index: %w", fileErr)
 	}
 
 	filePath := metadata.FilePath
 
-	if !strings.HasPrefix(filePath, s.root) {
+	if !strings.HasPrefix(filePath, s.config.Root) {
 		return models.File{}, fmt.Errorf("file path escapes root: %s", filePath)
 	}
 
@@ -124,6 +142,15 @@ func (s *fileService) GetFile(owner string, fileId string) (models.File, error) 
 		Metadata: metadata,
 		Data:     data,
 	}, nil
+}
+
+func (s *fileService) validateFileExtension(fileExtension string) bool {
+	for _, extension := range s.config.AllowedFileExtensions {
+		if extension == fileExtension {
+			return true
+		}
+	}
+	return false
 }
 
 const (
